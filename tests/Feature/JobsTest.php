@@ -8,6 +8,7 @@ use App\Models\ScrapeJob;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Redis;
 use Tests\TestCase;
 
 class JobsTest extends TestCase
@@ -52,6 +53,12 @@ class JobsTest extends TestCase
             });
         }
 
+        // Redis entries are being set correctly
+        $createdJobsUuids = ScrapeJob::query()->get()->pluck('uuid');
+        foreach ($createdJobsUuids as $uuid) {
+            $this->assertNotNull(Redis::get($uuid));
+        }
+
         $response->assertJson(['message' => 'Web scraping has been queued.']);
     }
 
@@ -61,6 +68,7 @@ class JobsTest extends TestCase
 
         /** @var ScrapeJob $job */
         $job = ScrapeJob::factory()->create();
+        Redis::set($job->uuid, json_encode($job->toArray()));
 
         $response = $this->get('api/jobs/' . $job->id);
 
@@ -78,9 +86,11 @@ class JobsTest extends TestCase
 
         /** @var ScrapeJob $job */
         $job = ScrapeJob::factory()->create();
+        Redis::set($job->uuid, json_encode($job->toArray()));
 
         $response = $this->delete('api/jobs/' . $job->id);
 
+        $this->assertNull(Redis::get($job->uuid));
         $this->assertDatabaseEmpty('scrape_jobs');
         $response->assertOk();
         $response->assertJsonFragment([

@@ -4,62 +4,52 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
-use App\Enums\JobStatusEnum;
-use App\Events\WebScrapingRequested;
 use App\Http\Requests\CreateJobRequest;
 use App\Http\Resources\ScrapeJobResource;
 use App\Models\ScrapeJob;
 use App\Repositories\JobRepository;
+use App\Repositories\RedisJobRepository;
+use App\Services\ScrapeJobService;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Redis;
-use Illuminate\Support\Str;
 
 
 class JobController extends Controller
 {
     public function __construct(
-        private readonly JobRepository $jobRepository,
+        private readonly JobRepository      $jobRepository,
+        private readonly ScrapeJobService   $scrapeJobService,
+        private readonly RedisJobRepository $redisJobRepository,
     )
     {
     }
 
-    /**
-     * @throws \RedisException
-     */
     public function create(CreateJobRequest $request): JsonResponse
     {
-        foreach ($request->validated('urls') as $url) {
-            $name = (string) Str::uuid();
-            $selectors = $request->validated('selectors');
-
-            $data = [
-                'name' => $name,
-                'url' => $url,
-                'selectors' => $request->validated('selectors'),
-                'status' => JobStatusEnum::QUEUED->value,
-            ];
-
-            $job = $this->jobRepository->store($data);
-
-//            Redis::rpush('jobs_queue', json_encode($data));
-
-            event(new WebScrapingRequested($job->id, $url, $selectors));
-        }
+        $this->scrapeJobService->createScrapeJob(
+            urls: $request->validated('urls'),
+            selectors: $request->validated('selectors'),
+        );
 
         return response()->json(['message' => 'Web scraping has been queued.']);
     }
 
-    public function show(ScrapeJob $job): ScrapeJobResource
+    public function show(ScrapeJob $scrapeJob): ScrapeJobResource
     {
-        return new ScrapeJobResource($job);
+        // If redis is used instead
+        $scrapeJob = $this->redisJobRepository->getByUuid($scrapeJob->uuid);
+
+        return new ScrapeJobResource($scrapeJob);
     }
 
     public function delete(ScrapeJob $scrapeJob): JsonResponse
     {
         try {
             $this->jobRepository->delete($scrapeJob);
+
+            // If redis is used instead
+            $this->redisJobRepository->delete($scrapeJob->uuid);
         } catch (Exception $exception) {
             Log::error("FAILED_TO_DELETE_SCRAPE_JOB", [
                 'message' => $exception->getMessage(),
